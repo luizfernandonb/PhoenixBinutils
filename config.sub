@@ -59,6 +59,12 @@ timestamp='2023-09-19'
 # even some reasonably current systems (Solaris 10 as case-in-point) still
 # have a pre-POSIX /bin/sh.
 
+if (test "$1" = "ppu-lv2"); then
+	echo 'powerpc64-ps3-elf'
+
+	exit
+fi
+
 me=`echo "$0" | sed -e 's,.*/,,'`
 
 usage="\
