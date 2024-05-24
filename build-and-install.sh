@@ -1,11 +1,11 @@
 #!/bin/sh
 
-export CFLAGS="-Os -g0 -ffunction-sections -fdata-sections -fno-builtin -s"
+export CFLAGS="-Oz -g0 -ffunction-sections -fdata-sections -fno-builtin -s"
 export CXXFLAGS="$CFLAGS"
 export LDFLAGS="-Wl,--gc-sections -Wl,--strip-all"
 
-if [ -z "${PS3_SDK}" ]; then
-	echo "Please set a value in the 'PS3_SDK' environment variable."
+if [ -z "${PHOENIX_SDK}" ]; then
+	echo "Please set a value in the 'PHOENIX_SDK' environment variable."
 	
 	exit 1
 fi
@@ -17,20 +17,25 @@ mkdir -p build
 cd build
 
 ../configure \
-	--prefix=$PS3_SDK \
-	--bindir=$PS3_SDK/bin \
-	--libdir=$PS3_SDK/binutils/lib \
-	--datarootdir=$PS3_SDK/binutils \
-	--includedir=$PS3_SDK/binutils/include \
-	--target=ppu-lv2 \
+	--prefix=$PHOENIX_SDK \
+	--bindir=$PHOENIX_SDK/bin \
+	--libdir=$PHOENIX_SDK/binutils/lib \
+	--datarootdir=$PHOENIX_SDK/binutils \
+	--includedir=$PHOENIX_SDK/binutils/include \
+	--target=ppu \
 	--disable-multilib \
 	--disable-shared \
 	--disable-libssp
 
 make -j$(nproc)
-make install-strip tooldir=$PS3_SDK/binutils
+make install-strip tooldir=$PHOENIX_SDK/binutils
 
-rm -rf $PS3_SDK/binutils/lib/ldscripts/*
-rm -rf $PS3_SDK/binutils/bin
+rm -rf $PHOENIX_SDK/binutils/lib/ldscripts/*
+rm -rf $PHOENIX_SDK/binutils/bin
+find $PHOENIX_SDK/binutils/gdb/syscalls ! -name "ppc64*" ! -name "gdb*" ! -name "freebsd*" ! -name "netbsd*" -type f -delete
 
-cp -f ../ld/emulparams/lv2.sh $PS3_SDK/binutils/lib/ldscripts/lv2.x
+cp -f ../ld/emulparams/ppu.sh $PHOENIX_SDK/binutils/lib/ldscripts/ppu.x
+
+unset CFLAGS
+unset CXXFLAGS
+unset LDFLAGS
