@@ -4,6 +4,12 @@
 
 # shellcheck disable=SC2006,SC2268 # see below for rationale
 
+if (test "$1" = "ppu"); then
+	echo 'powerpc64-ps3-elf'
+
+	exit
+fi
+
 timestamp='2023-09-19'
 
 # This file is free software; you can redistribute it and/or modify it
@@ -58,12 +64,6 @@ timestamp='2023-09-19'
 # variety of pre-POSIX systems that do not have POSIX shells at all, and
 # even some reasonably current systems (Solaris 10 as case-in-point) still
 # have a pre-POSIX /bin/sh.
-
-if (test "$1" = "ppu-lv2"); then
-	echo 'powerpc64-ps3-elf'
-
-	exit
-fi
 
 me=`echo "$0" | sed -e 's,.*/,,'`
 
