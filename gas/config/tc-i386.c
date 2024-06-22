@@ -4573,6 +4573,20 @@ check_hle (void)
     }
 }
 
+/* Helper for optimization (running ahead of process_suffix()), to make sure we
+   convert only well-formed insns.  @OP is the sized operand to cross check
+   against (typically a register).  Checking against a single operand typically
+   suffices, as match_template() has already honored CheckOperandSize.  */
+
+static bool is_plausible_suffix (unsigned int op)
+{
+  return !i.suffix
+	 || (i.suffix == BYTE_MNEM_SUFFIX && i.types[op].bitfield.byte)
+	 || (i.suffix == WORD_MNEM_SUFFIX && i.types[op].bitfield.word)
+	 || (i.suffix == LONG_MNEM_SUFFIX && i.types[op].bitfield.dword)
+	 || (i.suffix == QWORD_MNEM_SUFFIX && i.types[op].bitfield.qword);
+}
+
 /* Encode aligned vector move as unaligned vector move.  */
 
 static void
@@ -4758,6 +4772,7 @@ optimize_encoding (void)
       && i.reg_operands == 1
       && i.imm_operands == 1
       && !i.types[1].bitfield.byte
+      && is_plausible_suffix (1)
       && i.op[0].imms->X_op == O_constant
       && fits_in_imm7 (i.op[0].imms->X_add_number))
     {
@@ -4768,7 +4783,7 @@ optimize_encoding (void)
       if (flag_code == CODE_64BIT || base_regnum < 4)
 	{
 	  i.types[1].bitfield.byte = 1;
-	  /* Ignore the suffix.  */
+	  /* Squash the suffix.  */
 	  i.suffix = 0;
 	  /* Convert to byte registers. 8-bit registers are special,
 	     RegRex64 and non-RegRex64 each have 8 registers.  */
@@ -4909,6 +4924,43 @@ optimize_encoding (void)
 	   orl %rN, %rN   -> testl %rN, %rN
        */
       i.tm.base_opcode = 0x84 | (i.tm.base_opcode & 1);
+    }
+  else if (!optimize_for_space
+	   && i.tm.base_opcode == 0xd0
+	   && (i.tm.opcode_space == SPACE_BASE
+	       || i.tm.opcode_space == SPACE_EVEXMAP4)
+	   && !i.mem_operands)
+    {
+      /* Optimize: -O:
+	   shlb $1, %rN  -> addb %rN, %rN
+	   shlw $1, %rN  -> addw %rN, %rN
+	   shll $1, %rN  -> addl %rN, %rN
+	   shlq $1, %rN  -> addq %rN, %rN
+
+	   shlb $1, %rN, %rM  -> addb %rN, %rN, %rM
+	   shlw $1, %rN, %rM  -> addw %rN, %rN, %rM
+	   shll $1, %rN, %rM  -> addl %rN, %rN, %rM
+	   shlq $1, %rN, %rM  -> addq %rN, %rN, %rM
+       */
+      gas_assert (i.tm.extension_opcode == 4);
+      i.tm.base_opcode = 0x00;
+      i.tm.extension_opcode = None;
+      if (i.operands >= 2)
+	{
+	  i.tm.operand_types[0] = i.tm.operand_types[1];
+	  i.op[0].regs = i.op[1].regs;
+	  i.types[0] = i.types[1];
+	}
+      else
+	{
+	  /* Legacy form with omitted shift count operand.  */
+	  i.tm.operand_types[1] = i.tm.operand_types[0];
+	  i.op[1].regs = i.op[0].regs;
+	  i.types[1] = i.types[0];
+	  i.operands = 2;
+	}
+      i.reg_operands++;
+      i.imm_operands = 0;
     }
   else if (i.tm.base_opcode == 0xba
 	   && i.tm.opcode_space == SPACE_0F
@@ -5166,6 +5218,48 @@ optimize_encoding (void)
 	  i.op[1].regs = i.op[0].regs;
 	}
     }
+  else if (i.tm.extension_opcode == 6
+	   && i.tm.base_opcode >= 0x71
+	   && i.tm.base_opcode <= 0x73
+	   && i.tm.opcode_space == SPACE_0F
+	   && i.op[0].imms->X_op == O_constant
+	   && i.op[0].imms->X_add_number == 1
+	   && !i.mem_operands)
+    {
+      /* Optimize: -O:
+	   psllw $1, %mmxN          -> paddw %mmxN, %mmxN
+	   psllw $1, %xmmN          -> paddw %xmmN, %xmmN
+	   vpsllw $1, %xmmN, %xmmM  -> vpaddw %xmmN, %xmmN, %xmmM
+	   vpsllw $1, %ymmN, %ymmM  -> vpaddw %ymmN, %ymmN, %ymmM
+	   vpsllw $1, %zmmN, %zmmM  -> vpaddw %zmmN, %zmmN, %zmmM
+
+	   pslld $1, %mmxN          -> paddd %mmxN, %mmxN
+	   pslld $1, %xmmN          -> paddd %xmmN, %xmmN
+	   vpslld $1, %xmmN, %xmmM  -> vpaddd %xmmN, %xmmN, %xmmM
+	   vpslld $1, %ymmN, %ymmM  -> vpaddd %ymmN, %ymmN, %ymmM
+	   vpslld $1, %zmmN, %zmmM  -> vpaddd %zmmN, %zmmN, %zmmM
+
+	   psllq $1, %xmmN          -> paddq %xmmN, %xmmN
+	   vpsllq $1, %xmmN, %xmmM  -> vpaddq %xmmN, %xmmN, %xmmM
+	   vpsllq $1, %ymmN, %ymmM  -> vpaddq %ymmN, %ymmN, %ymmM
+	   vpsllq $1, %zmmN, %zmmM  -> vpaddq %zmmN, %zmmN, %zmmM
+	  */
+      if (i.tm.base_opcode != 0x73)
+	i.tm.base_opcode |= 0xfc; /* {,v}padd{w,d} */
+      else
+	{
+	  gas_assert (i.tm.operand_types[1].bitfield.class != RegMMX);
+	  i.tm.base_opcode = 0xd4; /* {,v}paddq */
+	}
+      i.tm.extension_opcode = None;
+      if (i.tm.opcode_modifier.vexvvvv)
+	i.tm.opcode_modifier.vexvvvv = VexVVVV_SRC1;
+      i.tm.operand_types[0] = i.tm.operand_types[1];
+      i.op[0].regs = i.op[1].regs;
+      i.types[0] = i.types[1];
+      i.reg_operands++;
+      i.imm_operands = 0;
+    }
   else if (optimize_for_space
 	   && i.tm.base_opcode == 0x59
 	   && i.tm.opcode_space == SPACE_0F38
@@ -5192,6 +5286,44 @@ optimize_encoding (void)
       i.tm.operand_types[2] = i.tm.operand_types[0];
 
       swap_2_operands (1, 2);
+    }
+  else if (i.tm.base_opcode == 0x16
+	   && i.tm.opcode_space == SPACE_0F3A
+	   && i.op[0].imms->X_op == O_constant
+	   && i.op[0].imms->X_add_number == 0)
+    {
+      /* Optimize: -O:
+         pextrd $0, %xmmN, ...   -> movd %xmmN, ...
+         pextrq $0, %xmmN, ...   -> movq %xmmN, ...
+         vpextrd $0, %xmmN, ...  -> vmovd %xmmN, ...
+         vpextrq $0, %xmmN, ...  -> vmovq %xmmN, ...
+       */
+      i.tm.opcode_space = SPACE_0F;
+      if (!i.mem_operands
+	  || i.tm.opcode_modifier.evex
+	  || (i.tm.opcode_modifier.vexw != VEXW1
+	      && i.tm.opcode_modifier.size != SIZE64))
+	i.tm.base_opcode = 0x7e;
+      else
+	{
+	  i.tm.base_opcode = 0xd6;
+	  i.tm.opcode_modifier.size = 0;
+	  i.tm.opcode_modifier.vexw
+	    = i.tm.opcode_modifier.sse2avx ? VEXW0 : VEXWIG;
+	}
+
+      i.op[0].regs = i.op[1].regs;
+      i.types[0] = i.types[1];
+      i.flags[0] = i.flags[1];
+      i.tm.operand_types[0] = i.tm.operand_types[1];
+
+      i.op[1].regs = i.op[2].regs;
+      i.types[1] = i.types[2];
+      i.flags[1] = i.flags[2];
+      i.tm.operand_types[1] = i.tm.operand_types[2];
+
+      i.operands = 2;
+      i.imm_operands = 0;
     }
 }
 
@@ -8668,8 +8800,8 @@ check_Rex_required (void)
 	return true;
     }
 
-  if ((i.index_reg && (i.index_reg->reg_flags & (RegRex | RegRex64)))
-      || (i.base_reg && (i.base_reg->reg_flags & (RegRex | RegRex64))))
+  if ((i.index_reg && (i.index_reg->reg_flags & RegRex))
+      || (i.base_reg && (i.base_reg->reg_flags & RegRex)))
     return true;
 
   /* Check pseudo prefix {rex} are valid.  */
